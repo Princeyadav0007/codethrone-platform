@@ -308,8 +308,8 @@ router.get('/google/callback',
     );
     // Redirect to frontend (production or development)
     const frontendUrl = process.env.NODE_ENV === 'production' 
-      ? 'https://codethrone.netlify.app'
-      : 'https://codethrone.netlify.app';
+      ? 'https://codethrone-platform.netlify.app'
+      : 'https://codethrone-platform.netlify.app';
     res.redirect(`${frontendUrl}/oauth?token=${encodeURIComponent(token)}`);
     // Or: res.json({ token, user });
   }

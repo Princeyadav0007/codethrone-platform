@@ -20,8 +20,8 @@ if (!googleAuthEnabled) {
   clientID: process.env.GOOGLE_CLIENT_ID, // Set in your .env
   clientSecret: process.env.GOOGLE_CLIENT_SECRET, // Set in your .env
   callbackURL: process.env.NODE_ENV === 'production' 
-    ? 'https://codestar-qlq6.onrender.com/api/auth/google/callback'
-    : 'https://codestar-qlq6.onrender.com/api/auth/google/callback',
+    ? 'https://codestar-fullstack-y54l.onrender.com/api/auth/google/callback'
+    : 'https://codestar-fullstack-y54l.onrender.com/api/auth/google/callback',
     
 }, async (accessToken, refreshToken, profile, done) => {
   try {
