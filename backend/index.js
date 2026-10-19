@@ -53,7 +53,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:5174",
   "http://localhost:5175",
-  "codethrone-platform.netlify.app",
+  "https://codethrone-platform.netlify.app",
   ...(process.env.CLIENT_URLS || "").split(",").map((o) => o.trim()).filter(Boolean),
 ]
 
