@@ -2,6 +2,8 @@ import express from "express"
 import Contest from "../models/Contest.js"
 import { authenticateToken, requireAdmin } from "../middleware/auth.js"
 import User from "../models/User.js"
+import Problem from "../models/Problem.js"
+import mongoose from "mongoose"
 const router = express.Router()
 
 // Function to determine contest status based on current time
@@ -408,13 +410,63 @@ router.post("/:id/register", authenticateToken, async (req, res) => {
 })
 
 // Admin: Create contest
+// The admin form sends the contest problems as [{ problemId, score }], but the Contest model stores
+// [{ problem, score, order }]. Mongoose silently drops fields it does not know ("problemId"), so every
+// contest created from the admin panel ended up with scores but NO problems (empty contest page).
+// This accepts both shapes and always stores the real one.
+//   strict  (create): any bad/missing problem is rejected with a clear message
+//   lenient (update): entries without a usable problem (e.g. from an already broken contest, or a problem
+//                     that was deleted) are dropped so the admin can still save and repair the contest
+async function normalizeContestProblems(input, { lenient = false } = {}) {
+  if (!Array.isArray(input)) return { error: "problems must be a list" }
+
+  const seen = new Set()
+  const items = []
+  for (const entry of input) {
+    const raw = entry && (entry.problem?._id ?? entry.problem ?? entry.problemId)
+    if (!raw) {
+      if (lenient) continue
+      return { error: "Every contest problem needs a problem id" }
+    }
+    const id = String(raw)
+    if (!mongoose.isValidObjectId(id)) return { error: `Invalid problem id: ${id}` }
+    if (seen.has(id)) continue
+    seen.add(id)
+    const score = Number(entry.score)
+    items.push({
+      problem: id,
+      score: Number.isInteger(score) && score >= 1 && score <= 10000 ? score : 100,
+      sortKey: Number.isFinite(Number(entry.order)) ? Number(entry.order) : items.length + 1,
+    })
+  }
+
+  const existing = new Set(
+    (await Problem.find({ _id: { $in: items.map((i) => i.problem) } }).select("_id")).map((d) => String(d._id)),
+  )
+  const missing = items.filter((i) => !existing.has(i.problem))
+  if (missing.length > 0 && !lenient) return { error: "Some selected problems no longer exist" }
+
+  const problems = items
+    .filter((i) => existing.has(i.problem))
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .map((i, index) => ({ problem: i.problem, score: i.score, order: index + 1 }))
+  return { problems }
+}
+
 router.post("/", authenticateToken, requireAdmin, async (req, res) => {
   console.log("📝 Create contest request")
 
   try {
+    const body = { ...req.body }
+    if (body.problems !== undefined) {
+      const result = await normalizeContestProblems(body.problems)
+      if (result.error) return res.status(400).json({ message: result.error })
+      body.problems = result.problems
+    }
+
     console.log("💾 Creating new contest...")
     const contest = new Contest({
-      ...req.body,
+      ...body,
       createdBy: req.user._id,
       status: getContestStatus(req.body.startTime, req.body.endTime),
     })
@@ -438,6 +490,11 @@ router.put("/:id", authenticateToken, requireAdmin, async (req, res) => {
 
     // Update status based on times if provided
     const updateData = { ...req.body }
+    if (updateData.problems !== undefined) {
+      const result = await normalizeContestProblems(updateData.problems, { lenient: true })
+      if (result.error) return res.status(400).json({ message: result.error })
+      updateData.problems = result.problems
+    }
     if (req.body.startTime && req.body.endTime) {
       updateData.status = getContestStatus(req.body.startTime, req.body.endTime)
     }

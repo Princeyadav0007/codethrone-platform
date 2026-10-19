@@ -689,7 +689,19 @@ const ContestProblems: React.FC = () => {
         </div>
 
         {/* Tab Content */}
-        {activeTab === "problems" && (
+        {activeTab === "problems" && contest.problems.length === 0 && (
+          <Card>
+            <CardContent className="p-10 text-center">
+              <Code className="h-10 w-10 mx-auto mb-3 text-gray-400" />
+              <h3 className="text-lg font-semibold mb-1 text-gray-900 dark:text-white">No problems in this contest yet</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-300">
+                The organisers have not added any problems to this contest. Please check back later.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {activeTab === "problems" && contest.problems.length > 0 && (
           <div className="grid grid-cols-1 gap-6">
             {contest.problems
               .sort((a, b) => (a.order || 0) - (b.order || 0))

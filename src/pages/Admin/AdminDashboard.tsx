@@ -899,7 +899,15 @@ const AdminDashboard: React.FC = () => {
 
   const handleEditContest = (contest: Contest) => {
     setEditingContestId(contest._id);
-    setEditContestData({ ...contest });
+    // Turn the stored problems into the same {problemId, score} list the "create" picker uses.
+    // Entries without a problem (contests created by the old buggy form) are left out.
+    const currentProblems = ((contest as any).problems || [])
+      .map((p: any) => {
+        const id = p?.problem?._id ?? p?.problem ?? p?.problemId;
+        return id ? { problemId: String(id), score: p.score || 100 } : null;
+      })
+      .filter(Boolean);
+    setEditContestData({ ...contest, problems: currentProblems });
   };
 
   const handleUpdateContest = async (e: React.FormEvent) => {
@@ -2606,6 +2614,74 @@ const AdminDashboard: React.FC = () => {
                           </div>
                         </div>
 
+                        {/* Problem Selection (edit) */}
+                        <div>
+                          <label className="block text-sm font-medium mb-2">Contest Problems</label>
+                          <div className="border border-gray-300 rounded-lg p-4 max-h-60 overflow-y-auto">
+                            <div className="text-sm text-gray-600 mb-3">
+                              Select the problems for this contest and set their scores:
+                            </div>
+                            <div className="space-y-2">
+                              {problems.map((problem) => {
+                                const editProblems: ContestProblem[] = editContestData.problems || [];
+                                const isSelected = editProblems.some((p) => p.problemId === problem._id);
+                                const selectedProblem = editProblems.find((p) => p.problemId === problem._id);
+
+                                return (
+                                  <div key={problem._id} className="flex items-center justify-between p-2 border rounded-md hover:bg-gray-50">
+                                    <div className="flex items-center flex-1">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={(e) => {
+                                          setEditContestData({
+                                            ...editContestData,
+                                            problems: e.target.checked
+                                              ? [...editProblems, { problemId: problem._id, score: 100 }]
+                                              : editProblems.filter((p) => p.problemId !== problem._id),
+                                          });
+                                        }}
+                                        className="mr-3"
+                                      />
+                                      <div className="flex-1">
+                                        <div className="font-medium text-sm">{problem.title}</div>
+                                        <div className="text-xs text-gray-500">{problem.difficulty}</div>
+                                      </div>
+                                    </div>
+                                    {isSelected && (
+                                      <div className="ml-4 flex items-center space-x-2">
+                                        <label className="text-sm font-medium">Score:</label>
+                                        <input
+                                          type="number"
+                                          min="1"
+                                          max="1000"
+                                          value={selectedProblem?.score || 100}
+                                          onChange={(e) => {
+                                            const score = parseInt(e.target.value) || 100;
+                                            setEditContestData({
+                                              ...editContestData,
+                                              problems: editProblems.map((p) =>
+                                                p.problemId === problem._id ? { ...p, score } : p
+                                              ),
+                                            });
+                                          }}
+                                          className="w-16 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-yellow-500"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {problems.length === 0 && (
+                              <div className="text-center text-gray-500 py-4">No problems available. Create some problems first.</div>
+                            )}
+                          </div>
+                          <div className="mt-2 text-sm text-gray-600">
+                            Selected: {(editContestData.problems || []).length} problem(s)
+                          </div>
+                        </div>
+
                         <div className="flex space-x-4">
                           <button
                             type="submit"
@@ -2635,6 +2711,11 @@ const AdminDashboard: React.FC = () => {
                               {new Date(contest.startTime).toLocaleString()} - {new Date(contest.endTime).toLocaleString()}
                             </p>
                             <p className="text-sm text-gray-500">{contest.participants.length} participants</p>
+                            {((contest as any).problems || []).filter((p: any) => p && p.problem).length === 0 && (
+                              <p className="text-sm text-red-600 font-medium">
+                                No problems attached to this contest. Click Edit and select its problems.
+                              </p>
+                            )}
                           </div>
                           <div className="flex items-center space-x-2">
                             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
