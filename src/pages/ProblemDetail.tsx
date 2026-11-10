@@ -38,6 +38,7 @@ import {
 } from "lucide-react"
 import CodeMirrorEditor from "../components/CodeMirrorEditor"
 import { getYouTubeEmbedUrl } from "../utils/video"
+import AiMarkdown from "../components/AiMarkdown"
 import ConsoleOutput from "../components/ConsoleOutput"
 import { API_URL } from "../config/api"
 import confetti from "canvas-confetti";
@@ -114,23 +115,6 @@ interface RunResult {
 }
 
 function AnimatedAiResponse({ response }: { response: string }) {
-  const [displayed, setDisplayed] = useState("")
-
-  useEffect(() => {
-    let i = 0
-    setDisplayed("")
-    const interval = setInterval(() => {
-      if (i < response.length - 1) {
-        setDisplayed((prev) => prev + response[i])
-        i++
-      } else {
-        clearInterval(interval)
-      }
-    }, 12)
-
-    return () => clearInterval(interval)
-  }, [response])
-
   return (
     <div className="flex justify-start">
       <div className="max-w-3xl bg-blue-50 dark:bg-blue-900/30 text-gray-900 dark:text-gray-100 p-3 rounded-xl shadow-md">
@@ -138,15 +122,9 @@ function AnimatedAiResponse({ response }: { response: string }) {
           <Bot className="h-4 w-4 mr-2 text-blue-600 dark:text-blue-400" />
           <span className="text-sm font-medium">AI Assistant</span>
         </div>
-        <div
-          className="text-sm whitespace-pre-wrap break-words"
-          dangerouslySetInnerHTML={{
-            __html: displayed.replace(
-              /\*\*(.*?)\*\*/g,
-              "<strong class='font-bold text-gray-900 dark:text-gray-100'>$1</strong>",
-            ),
-          }}
-        />
+        <div className="text-sm break-words">
+          <AiMarkdown text={response} />
+        </div>
       </div>
     </div>
   )
@@ -572,44 +550,13 @@ const ProblemDetail: React.FC = () => {
     setAiResponse("")
 
     try {
-      const examplesText = problem.examples
-      .map((ex, i) => `Example ${i + 1}:\nInput: ${ex.input}\nOutput: ${ex.output}\nExplanation: ${ex.explanation || ""}`)
-      .join("\n\n");
-
-    const context = `
-    Here is the problem statement:
-    Title: ${problem.title}
-    Description: ${problem.description}
-    Constraints: ${problem.constraints}
-    Examples:
-    ${examplesText}
-    
-    INSTRUCTION:
-    - DO NOT use Markdown symbols like "**", "__", "*", or "\`\`\`".
-    - DO NOT format code using triple backticks or indentation blocks.
-    - WHENEVER you give a code block:
-      - First write: PYTHON CODE (or the language name)
-      - Then leave one line
-      - Then, write the code on a new line, plain text, no formatting
-      - After code , if there is further text , again leave one line
-      - Wrap code between comment lines like:
-    PYTHON CODE
-
-    // START OF CODE
-    (code goes here)
-    // END OF CODE
-
-    - Everything else should be in plain readable text.
-    
-    User question: ${aiPrompt}
-    `.trim();
-
-    // AI call goes through our backend (API key stays on the server)
-    const aiRes = await axios.post(
-      `${API_URL}/mentor/ask`,
-      { prompt: context },
-      { headers: { Authorization: `Bearer ${token}` } }
-    );
+      // The server builds the prompt from the real problem: it only answers about THIS problem and writes
+      // code in the language selected in the editor (so we only send the question, the language and the code).
+      const aiRes = await axios.post(
+        `${API_URL}/mentor/problem-assist`,
+        { problemId: problem._id, question: aiPrompt, language, code },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
     const generatedText: string = aiRes.data?.reply || "No response received.";
 
       setAiResponse(generatedText)
@@ -1967,15 +1914,9 @@ const ProblemDetail: React.FC = () => {
                       Space Complexity: {spaceComplexity}
                     </div>
                   </div>
-                  <div
-                    className="text-sm whitespace-pre-wrap break-words text-gray-900 dark:text-gray-100"
-                    dangerouslySetInnerHTML={{
-                      __html: justification.replace(
-                        /\*\*(.*?)\*\*/g,
-                        "<strong class='font-bold text-gray-900 dark:text-gray-100'>$1</strong>",
-                      ),
-                    }}
-                  />
+                  <div className="text-sm break-words text-gray-900 dark:text-gray-100">
+                    <AiMarkdown text={justification} />
+                  </div>
                 </div>
               )}
               {!complexityAiLoading && !complexityAiResponse && (

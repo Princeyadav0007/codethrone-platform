@@ -25,11 +25,11 @@ interface MCQQuestion {
   question: string;
   options: {
     text: string;
-    isCorrect: boolean;
+    isCorrect?: boolean; // never sent by the server any more (answers are revealed after answering)
   }[];
   domain: string;
   difficulty: string;
-  explanation?: string;
+  explanation?: string; // never sent up front; it arrives with the answer result
 }
 
 interface RapidFireGame {
@@ -206,7 +206,8 @@ const MCQCard = memo(({
   selectedAnswer, 
   showResult, 
   isCorrect, 
-  correctAnswer 
+  correctAnswer,
+  explanation
 }: {
   question: MCQQuestion;
   questionNumber: number;
@@ -216,6 +217,7 @@ const MCQCard = memo(({
   showResult: boolean;
   isCorrect?: boolean;
   correctAnswer?: number;
+  explanation?: string;
 }) => {
   const getDomainColor = (domain: string) => {
     switch (domain) {
@@ -325,10 +327,10 @@ const MCQCard = memo(({
         </div>
       )}
 
-      {showResult && question.explanation && (
+      {showResult && (explanation || question.explanation) && (
         <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
           <h4 className="font-semibold text-blue-800 dark:text-blue-300 mb-2">Explanation:</h4>
-          <p className="text-blue-700 dark:text-blue-300 text-sm">{question.explanation}</p>
+          <p className="text-blue-700 dark:text-blue-300 text-sm">{explanation || question.explanation}</p>
         </div>
       )}
     </div>
@@ -600,6 +602,14 @@ const RapidFire: React.FC = () => {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [showResult, setShowResult] = useState(false);
+  // What the SERVER says about the answer just given (right / wrong, the right option, the explanation).
+  // The browser no longer receives the correct answers up front, so it cannot work this out itself.
+  const [answerResult, setAnswerResult] = useState<{ isCorrect?: boolean; correctAnswer?: number; explanation?: string } | null>(null);
+  // Lets socket handlers (created once) know whether the game is already running
+  const gameStartedRef = useRef(false);
+  useEffect(() => {
+    gameStartedRef.current = gameStarted;
+  }, [gameStarted]);
   
   // New states for rating system and confetti
   const [gameResults, setGameResults] = useState<any[]>([]);
@@ -713,9 +723,22 @@ const RapidFire: React.FC = () => {
       });
       
       setActiveGame(data as any);
+
+      // A player who connects late (slow connection, page refresh) is told the real remaining time and the
+      // question they are on. A repeated start message for a game that is already running must not reset anything.
+      const serverTime = typeof data.timeRemaining === 'number' ? data.timeRemaining : 120;
+      const serverIndex = typeof data.currentQuestionIndex === 'number' ? data.currentQuestionIndex : 0;
+
+      if (gameStartedRef.current) {
+        if (typeof data.timeRemaining === 'number') setTimeRemaining(serverTime);
+        if (typeof data.currentQuestionIndex === 'number') setCurrentQuestionIndex(serverIndex);
+        return;
+      }
+
+      gameStartedRef.current = true;
       setGameStarted(true);
-      setTimeRemaining(120); // BULLETPROOF: 120 seconds global timer
-      setCurrentQuestionIndex(0); // Reset to first question
+      setTimeRemaining(serverTime); // BULLETPROOF: global timer (120 s from the real start time)
+      setCurrentQuestionIndex(serverIndex);
       questionStartTime.current = Date.now();
       
       // Clear submission tracking for new game
@@ -821,6 +844,7 @@ const RapidFire: React.FC = () => {
         setCurrentQuestionIndex(data.questionIndex);
         setSelectedAnswer(null);
         setShowResult(false);
+        setAnswerResult(null);
         // NOTE: No timer reset - using global 120-second timer
         questionStartTime.current = Date.now();
         
@@ -852,6 +876,7 @@ const RapidFire: React.FC = () => {
     newSocket.on("answer-result", (result: any) => {
       console.log("📝 BULLETPROOF: Answer result received:", result);
       
+      setAnswerResult({ isCorrect: result.isCorrect, correctAnswer: result.correctAnswer, explanation: result.explanation });
       setShowResult(true);
       setTimeout(() => {
         setShowResult(false);
@@ -863,7 +888,8 @@ const RapidFire: React.FC = () => {
     newSocket.on("question-skipped", (result: any) => {
       console.log("⏭️ BULLETPROOF: Question skipped:", result);
       
-      // Show skip confirmation
+      // Show skip confirmation (nothing to highlight)
+      setAnswerResult(null);
       setShowResult(true);
       setTimeout(() => {
         setShowResult(false);
@@ -1262,9 +1288,11 @@ const RapidFire: React.FC = () => {
     setActiveGame(null);
     setGameFinished(false);
     setGameStarted(false);
+    gameStartedRef.current = false;
     setTimeRemaining(120); // BULLETPROOF: Reset to 120 seconds
     setCurrentQuestionIndex(0);
     setSelectedAnswer(null);
+    setAnswerResult(null);
     
     // Clear submission tracking
     submittedForQuestion.current.clear();
@@ -1418,8 +1446,9 @@ const RapidFire: React.FC = () => {
                 onSkip={skipQuestion}
                 selectedAnswer={selectedAnswer}
                 showResult={showResult}
-                isCorrect={showResult ? currentQuestion?.options?.[selectedAnswer || 0]?.isCorrect : undefined}
-                correctAnswer={showResult ? currentQuestion?.options?.findIndex(opt => opt.isCorrect) : undefined}
+                isCorrect={showResult ? answerResult?.isCorrect : undefined}
+                correctAnswer={showResult ? answerResult?.correctAnswer : undefined}
+                explanation={showResult ? answerResult?.explanation : undefined}
               />
             ) : (
               <div className="bg-white dark:bg-gray-800 rounded-lg shadow-lg p-8 text-center border border-gray-200 dark:border-gray-700">

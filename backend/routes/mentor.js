@@ -3,6 +3,7 @@ import mongoose from "mongoose"
 import MentorChat from "../models/MentorChat.js"
 import { authenticateToken } from "../middleware/auth.js"
 import { generateReply, GeminiError, MENTOR_SYSTEM_PROMPT } from "../services/geminiService.js"
+import { askAboutProblem, SUPPORTED_LANGUAGES } from "../services/problemAssistant.js"
 
 const router = express.Router()
 
@@ -136,6 +137,28 @@ router.post("/chat", rateLimit(15), async (req, res) => {
       userMessage: saved[0],
       reply: saved[1],
     })
+  } catch (err) {
+    sendError(res, err)
+  }
+})
+
+// Problem-page AI Assistant: answers ONLY about the given problem and writes code in the selected language.
+// The prompt is built on the server from the real problem (see services/problemAssistant.js).
+router.post("/problem-assist", rateLimit(15), async (req, res) => {
+  try {
+    const { problemId, language } = req.body || {}
+    const question = String(req.body?.question || "").trim()
+    const code = typeof req.body?.code === "string" ? req.body.code : ""
+
+    if (!validId(problemId)) return res.status(400).json({ message: "Invalid problem" })
+    if (!SUPPORTED_LANGUAGES.includes(language)) return res.status(400).json({ message: "Unsupported language" })
+    if (!question) return res.status(400).json({ message: "Please type a question" })
+    if (question.length > 1500) return res.status(400).json({ message: "Question is too long (max 1500 characters)" })
+    if (code.length > MAX_ASK_CHARS) return res.status(400).json({ message: "Code is too long" })
+
+    const reply = await askAboutProblem({ problemId, question, language, code })
+    if (reply === null) return res.status(404).json({ message: "Problem not found" })
+    res.json({ reply })
   } catch (err) {
     sendError(res, err)
   }

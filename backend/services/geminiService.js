@@ -1,7 +1,7 @@
 // Central place for every Gemini call. The API key stays on the server only.
 // Uses the REST API directly (no SDK version issues) with model fallback.
 
-const API_ROOT = "https://generativelanguage.googleapis.com/v1beta/models"
+const API_ROOT = process.env.GEMINI_API_ROOT || "https://generativelanguage.googleapis.com/v1beta/models" // override only used by tests
 const DEFAULT_MODELS = ["gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash"]
 const TIMEOUT_MS = 45000
 

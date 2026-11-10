@@ -3,6 +3,7 @@ import RapidFireGame from '../models/RapidFireGame.js';
 import MCQQuestion from '../models/MCQQuestion.js';
 import User from '../models/User.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { sanitizeGame, isWaitingGameAlive, releaseUserStaleGames } from '../services/rapidfireHelpers.js';
 
 const router = express.Router();
 
@@ -95,98 +96,77 @@ const getRandomQuestions = async () => {
 };
 
 // Create random rapid fire match
+const populateGame = (id) =>
+  RapidFireGame.findById(id)
+    .populate('players.user', 'username profile.avatar ratings.rapidFireRating')
+    .populate('questionSet');
+
+const playerEntry = (user) => ({
+  user: user._id,
+  usernameSnapshot: user.username,
+  avatarSnapshot: user.profile?.avatar || '',
+  ratingBefore: user.ratings?.rapidFireRating || 1200
+});
+
 router.post('/random', authenticateToken, async (req, res) => {
   try {
     console.log('🎯 Creating random rapid fire match for user:', req.user.id);
+    const io = req.app.get('io');
 
-    // Check if user is already in a game
-    const existingGame = await RapidFireGame.findOne({
-      'players.user': req.user.id,
-      status: { $in: ['waiting', 'ongoing'] }
-    });
-
+    // 1) If the user already has a LIVE game, give it back. Dead games (creator gone, game long over)
+    //    are cleaned up here, otherwise they were returned forever and two players never got matched.
+    const existingGame = await releaseUserStaleGames(io, req.user.id);
     if (existingGame) {
       console.log('♻️ User already in rapid fire game:', existingGame._id);
-      return res.json(existingGame);
+      return res.json(sanitizeGame(await populateGame(existingGame._id)));
     }
 
-    // Look for waiting games
-    let game = await RapidFireGame.findOne({
-      status: 'waiting',
-      'players.1': { $exists: false } // Less than 2 players
-    }).populate('players.user', 'username profile.avatar ratings.rapidFireRating');
-
-    if (game) {
-      // Join existing game
-      console.log('🎮 Joining existing rapid fire game:', game._id);
-      
-      const user = await User.findById(req.user.id);
-      
-      game.players.push({
-        user: req.user.id,
-        usernameSnapshot: user.username,
-        avatarSnapshot: user.profile?.avatar || '',
-        ratingBefore: user.ratings.rapidFireRating || 1200
-      });
-
-      await game.save();
-      
-      console.log('🔍 After joining - game questionSet:', game.questionSet.map(id => id.toString()));
-      
-      // Populate and return
-      game = await RapidFireGame.findById(game._id)
-        .populate('players.user', 'username profile.avatar ratings.rapidFireRating')
-        .populate('questionSet');
-
-      console.log('✅ Joined rapid fire game successfully');
-      console.log('🔍 Populated game questionSet after join:', game.questionSet.length, 'questions');
-      return res.json(game);
-    }
-
-    // Create new game
-    console.log('🆕 Creating new rapid fire game...');
-    
     const user = await User.findById(req.user.id);
+
+    // 2) Join the oldest waiting RANDOM game whose creator is still there.
+    //    (room-code games are private: Find Match must never walk into them)
+    const candidates = await RapidFireGame.find({
+      status: 'waiting',
+      gameMode: 'random',
+      'players.1': { $exists: false },
+      'players.user': { $ne: req.user.id }
+    }).sort({ createdAt: 1 }).limit(10);
+
+    for (const candidate of candidates) {
+      if (!(await isWaitingGameAlive(io, candidate))) {
+        console.log('👻 Removing ghost waiting game:', candidate._id);
+        await RapidFireGame.deleteOne({ _id: candidate._id, status: 'waiting' });
+        continue;
+      }
+      // take the second seat atomically (null if someone else just took it)
+      const claimed = await RapidFireGame.findOneAndUpdate(
+        { _id: candidate._id, status: 'waiting', 'players.1': { $exists: false } },
+        { $push: { players: playerEntry(user) } },
+        { new: true }
+      );
+      if (claimed) {
+        console.log('🎮 Joined existing rapid fire game:', claimed._id);
+        return res.json(sanitizeGame(await populateGame(claimed._id)));
+      }
+    }
+
+    // 3) Nobody is waiting: create a new game
+    console.log('🆕 Creating new rapid fire game...');
     const questions = await getRandomQuestions();
-    
-    console.log('🔍 Generated questions sample:', {
-      count: questions.length,
-      firstQuestionId: questions[0]?._id,
-      firstQuestionText: questions[0]?.question?.substring(0, 50),
-      firstQuestionOptions: questions[0]?.options?.length,
-      questionTypes: questions.map(q => typeof q)
-    });
-    
-    game = new RapidFireGame({
+
+    const game = new RapidFireGame({
       roomId: generateRoomId(),
       gameMode: 'random',
       questionSet: questions.map(q => q._id),
       totalQuestions: questions.length,
-      questionDistribution: {
-        dsa: 3,
-        systemDesign: 3,
-        aiml: 2,
-        aptitude: 2
-      },
-      players: [{
-        user: req.user.id,
-        usernameSnapshot: user.username,
-        avatarSnapshot: user.profile?.avatar || '',
-        ratingBefore: user.ratings.rapidFireRating || 1200
-      }]
+      questionDistribution: { dsa: 3, systemDesign: 3, aiml: 2, aptitude: 2 },
+      players: [playerEntry(user)]
     });
-
     await game.save();
-    
-    console.log('🔍 Saved game questionSet:', game.questionSet.map(id => id.toString()));
-    
-    // Populate and return
-    game = await RapidFireGame.findById(game._id)
-      .populate('players.user', 'username profile.avatar ratings.rapidFireRating')
-      .populate('questionSet');
 
-    console.log('✅ Created new rapid fire game:', game._id, 'with', game.questionSet.length, 'questions');
-    res.json(game);
+    const populated = await populateGame(game._id);
+    console.log('✅ Created new rapid fire game:', game._id, 'with', populated.questionSet.length, 'questions');
+    res.json(sanitizeGame(populated));
 
   } catch (error) {
     console.error('❌ Random rapid fire match error:', error);
@@ -199,37 +179,25 @@ router.post('/room', authenticateToken, async (req, res) => {
   try {
     console.log('🏠 Creating rapid fire room for user:', req.user.id);
 
+    // drop this user's dead games first (they would otherwise confuse the "restore game" logic)
+    await releaseUserStaleGames(req.app.get('io'), req.user.id);
+
     const user = await User.findById(req.user.id);
     const questions = await getRandomQuestions();
-    
+
     const game = new RapidFireGame({
       roomId: generateRoomId(),
       gameMode: 'room',
       questionSet: questions.map(q => q._id),
       totalQuestions: questions.length,
-      questionDistribution: {
-        dsa: 3,
-        systemDesign: 3,
-        aiml: 2,
-        aptitude: 2
-      },
-      players: [{
-        user: req.user.id,
-        usernameSnapshot: user.username,
-        avatarSnapshot: user.profile?.avatar || '',
-        ratingBefore: user.ratings.rapidFireRating || 1200
-      }]
+      questionDistribution: { dsa: 3, systemDesign: 3, aiml: 2, aptitude: 2 },
+      players: [playerEntry(user)]
     });
-
     await game.save();
-    
-    // Populate and return
-    const populatedGame = await RapidFireGame.findById(game._id)
-      .populate('players.user', 'username profile.avatar ratings.rapidFireRating')
-      .populate('questionSet');
 
+    const populatedGame = await populateGame(game._id);
     console.log('✅ Created rapid fire room:', game.roomId, 'with', populatedGame.questionSet.length, 'questions');
-    res.json(populatedGame);
+    res.json(sanitizeGame(populatedGame));
 
   } catch (error) {
     console.error('❌ Rapid fire room creation error:', error);
@@ -242,49 +210,108 @@ router.post('/room/:roomCode/join', authenticateToken, async (req, res) => {
   try {
     const { roomCode } = req.params;
     console.log('🚪 Joining rapid fire room:', roomCode, 'for user:', req.user.id);
+    const io = req.app.get('io');
 
     const game = await RapidFireGame.findOne({
-      roomId: roomCode.toUpperCase(),
+      roomId: String(roomCode).toUpperCase(),
       status: 'waiting'
-    }).populate('players.user', 'username profile.avatar ratings.rapidFireRating');
+    });
 
     if (!game) {
       return res.status(404).json({ message: 'Room not found or already started' });
+    }
+
+    // Check if user already in this game
+    if (game.players.some(p => p.user.toString() === req.user.id)) {
+      console.log('♻️ User already in this rapid fire game');
+      return res.json(sanitizeGame(await populateGame(game._id)));
     }
 
     if (game.players.length >= 2) {
       return res.status(400).json({ message: 'Room is full' });
     }
 
-    // Check if user already in this game
-    const alreadyInGame = game.players.some(p => p.user._id.toString() === req.user.id);
-    if (alreadyInGame) {
-      console.log('♻️ User already in this rapid fire game');
-      return res.json(game);
+    // A room whose creator already left cannot be joined
+    if (!(await isWaitingGameAlive(io, game))) {
+      await RapidFireGame.deleteOne({ _id: game._id, status: 'waiting' });
+      return res.status(404).json({ message: 'Room not found or already started' });
     }
 
     const user = await User.findById(req.user.id);
-    
-    game.players.push({
-      user: req.user.id,
-      usernameSnapshot: user.username,
-      avatarSnapshot: user.profile?.avatar || '',
-      ratingBefore: user.ratings.rapidFireRating || 1200
-    });
 
-    await game.save();
-    
-    // Populate and return
-    const populatedGame = await RapidFireGame.findById(game._id)
-      .populate('players.user', 'username profile.avatar ratings.rapidFireRating')
-      .populate('questionSet');
+    // take the second seat atomically
+    const claimed = await RapidFireGame.findOneAndUpdate(
+      { _id: game._id, status: 'waiting', 'players.1': { $exists: false } },
+      { $push: { players: playerEntry(user) } },
+      { new: true }
+    );
+    if (!claimed) {
+      return res.status(400).json({ message: 'Room is full' });
+    }
 
     console.log('✅ Joined rapid fire room successfully');
-    res.json(populatedGame);
+    res.json(sanitizeGame(await populateGame(claimed._id)));
 
   } catch (error) {
     console.error('❌ Rapid fire room join error:', error);
     res.status(500).json({ message: 'Failed to join rapid fire room' });
+  }
+});
+
+// Get rapid fire leaderboard
+router.get('/leaderboard', async (req, res) => {
+  try {
+    console.log('🏆 Getting rapid fire leaderboard...');
+
+    const { page = 1, limit = 50 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const leaderboard = await User.find({
+      'ratings.rapidFireRating': { $exists: true, $gt: 0 }
+    })
+    .select('username profile.avatar ratings.rapidFireRating rapidFireHistory recentGameForm')
+    .sort({ 'ratings.rapidFireRating': -1 })
+    .limit(parseInt(limit))
+    .skip(skip);
+
+    // Add rank and calculate stats
+    const leaderboardWithStats = leaderboard.map((user, index) => {
+      const totalGames = user.rapidFireHistory?.length || 0;
+      const wins = user.rapidFireHistory?.filter(h => h.result === 'win').length || 0;
+      const winRate = totalGames > 0 ? ((wins / totalGames) * 100).toFixed(1) : '0.0';
+
+      // Get latest form from recentGameForm for rapidfire games
+      let latestForm = [];
+      if (user.recentGameForm && user.recentGameForm.length > 0) {
+        const rapidFireGames = user.recentGameForm.filter(game => game.gameType === 'rapidfire');
+        latestForm = rapidFireGames.slice(0, 5).map(game => game.result);
+        
+        // Pad with '-' if less than 5 games
+        while (latestForm.length < 5) {
+          latestForm.push('-');
+        }
+      } else {
+        latestForm = Array(5).fill('-');
+      }
+
+      return {
+        rank: skip + index + 1,
+        username: user.username,
+        avatar: user.profile?.avatar,
+        rating: user.ratings.rapidFireRating || 1200,
+        totalGames,
+        wins,
+        winRate: parseFloat(winRate),
+        latestForm
+      };
+    });
+
+    console.log('✅ Retrieved rapid fire leaderboard:', leaderboardWithStats.length, 'users');
+    res.json(leaderboardWithStats);
+
+  } catch (error) {
+    console.error('❌ Get rapid fire leaderboard error:', error);
+    res.status(500).json({ message: 'Failed to get rapid fire leaderboard' });
   }
 });
 
@@ -302,8 +329,12 @@ router.get('/:gameId', authenticateToken, async (req, res) => {
       return res.status(404).json({ message: 'Rapid fire game not found' });
     }
 
+    if (!game.players.some(p => p.user._id.toString() === req.user.id)) {
+      return res.status(403).json({ message: 'Not authorized to view this game' });
+    }
+
     console.log('✅ Retrieved rapid fire game:', game._id);
-    res.json(game);
+    res.json(sanitizeGame(game));
 
   } catch (error) {
     console.error('❌ Get rapid fire game error:', error);
@@ -578,63 +609,6 @@ router.post('/:gameId/leave', authenticateToken, async (req, res) => {
   }
 });
 
-// Get rapid fire leaderboard
-router.get('/leaderboard', async (req, res) => {
-  try {
-    console.log('🏆 Getting rapid fire leaderboard...');
-
-    const { page = 1, limit = 50 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const leaderboard = await User.find({
-      'ratings.rapidFireRating': { $exists: true, $gt: 0 }
-    })
-    .select('username profile.avatar ratings.rapidFireRating rapidFireHistory recentGameForm')
-    .sort({ 'ratings.rapidFireRating': -1 })
-    .limit(parseInt(limit))
-    .skip(skip);
-
-    // Add rank and calculate stats
-    const leaderboardWithStats = leaderboard.map((user, index) => {
-      const totalGames = user.rapidFireHistory?.length || 0;
-      const wins = user.rapidFireHistory?.filter(h => h.result === 'win').length || 0;
-      const winRate = totalGames > 0 ? ((wins / totalGames) * 100).toFixed(1) : '0.0';
-
-      // Get latest form from recentGameForm for rapidfire games
-      let latestForm = [];
-      if (user.recentGameForm && user.recentGameForm.length > 0) {
-        const rapidFireGames = user.recentGameForm.filter(game => game.gameType === 'rapidfire');
-        latestForm = rapidFireGames.slice(0, 5).map(game => game.result);
-        
-        // Pad with '-' if less than 5 games
-        while (latestForm.length < 5) {
-          latestForm.push('-');
-        }
-      } else {
-        latestForm = Array(5).fill('-');
-      }
-
-      return {
-        rank: skip + index + 1,
-        username: user.username,
-        avatar: user.profile?.avatar,
-        rating: user.ratings.rapidFireRating || 1200,
-        totalGames,
-        wins,
-        winRate: parseFloat(winRate),
-        latestForm
-      };
-    });
-
-    console.log('✅ Retrieved rapid fire leaderboard:', leaderboardWithStats.length, 'users');
-    res.json(leaderboardWithStats);
-
-  } catch (error) {
-    console.error('❌ Get rapid fire leaderboard error:', error);
-    res.status(500).json({ message: 'Failed to get rapid fire leaderboard' });
-  }
-});
-
 // Get rapid fire game by ID (for reconnection)
 router.get('/game/:gameId', authenticateToken, async (req, res) => {
   try {
@@ -656,7 +630,7 @@ router.get('/game/:gameId', authenticateToken, async (req, res) => {
     }
 
     console.log('✅ Retrieved rapid fire game:', game._id, 'Status:', game.status);
-    res.json(game);
+    res.json(sanitizeGame(game));
 
   } catch (error) {
     console.error('❌ Get rapid fire game error:', error);
