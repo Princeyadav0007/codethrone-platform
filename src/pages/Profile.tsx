@@ -1404,7 +1404,7 @@ const Profile: React.FC = () => {
                       <div className="p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded-lg">
                         <Zap className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
                       </div>
-                      <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Game Rating</h4>
+                      <h4 className="text-lg font-semibold text-gray-900 dark:text-white">Coding Battle Rating</h4>
                     </div>
                   </div>
                   <div className="text-center">
