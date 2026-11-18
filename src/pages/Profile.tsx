@@ -1232,7 +1232,7 @@ const Profile: React.FC = () => {
                       <div className="text-3xl font-bold text-gray-900 dark:text-white">
                         <AnimatedCounter end={profile.stats.problemsSolved.total} />
                       </div>
-                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Total Problems</p>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">Problems Solved</p>
                     </div>
                     <ProgressCircle 
                       percentage={profile.totalProblemsCount ? ((profile.stats.problemsSolved.total || 0) / profile.totalProblemsCount) * 100 : 0} 
