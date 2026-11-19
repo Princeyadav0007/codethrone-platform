@@ -1348,7 +1348,7 @@ const handleApiError = (error: any, context: string) => {
                 { level: "2", label: "Junior", years: "2-3 years", icon: "🌿", color: "from-blue-400 to-blue-500" },
                 { level: "4", label: "Mid-Level", years: "4-6 years", icon: "🌳", color: "from-purple-400 to-purple-500" },
                 { level: "7", label: "Senior", years: "7+ years", icon: "🏆", color: "from-orange-400 to-orange-500" },
-                { level: "10", label: "Staff/Principal", years: "10+ years", icon: "👑", color: "from-red-400 to-red-500" }
+                { level: "10", label: "Experts", years: "10+ years", icon: "👑", color: "from-red-400 to-red-500" }
               ].map((item) => (
                 <div
                   key={item.level}
